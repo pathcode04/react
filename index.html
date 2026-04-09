@@ -198,8 +198,14 @@
 
         <div class="toolbar">
           <button class="ghost" id="reanalyzeBtn">텍스트 재분석</button>
+          <button class="ghost" id="extractSeekerBtn">구직자 추출</button>
           <button class="ghost" id="sampleBtn">샘플 텍스트</button>
           <button class="ghost" id="resetBtn">초기화</button>
+        </div>
+
+        <div class="field">
+          <label for="seekerOnlyText">구직자 발화 추출본 (수정 가능)</label>
+          <textarea id="seekerOnlyText" placeholder="[구직자 추출] 버튼 실행 시 자동 입력됩니다."></textarea>
         </div>
 
         <p class="mini">참고: 최초 1회는 로컬 음성모델(Whisper tiny) 로딩으로 시간이 걸릴 수 있습니다.</p>
@@ -259,8 +265,10 @@
       statusBox: $("statusBox"),
       transcript: $("transcript"),
       reanalyzeBtn: $("reanalyzeBtn"),
+      extractSeekerBtn: $("extractSeekerBtn"),
       sampleBtn: $("sampleBtn"),
       resetBtn: $("resetBtn"),
+      seekerOnlyText: $("seekerOnlyText"),
       topicOut: $("topicOut"),
       emotionOut: $("emotionOut"),
       needsOut: $("needsOut"),
@@ -290,6 +298,9 @@
 
     const POSITIVE = ["가능", "기대", "의욕", "준비", "괜찮", "자신", "희망", "성장"];
     const NEGATIVE = ["불안", "걱정", "막막", "두렵", "자신없", "스트레스", "우울", "압박", "포기", "혼란"];
+    const COUNSELOR_TAGS = ["상담사", "상담원", "주무관", "코치", "컨설턴트", "센터"];
+    const SEEKER_TAGS = ["구직자", "내담자", "참여자", "민원인"];
+    const COUNSELOR_HINTS = ["어떠세요", "생각하시나요", "가능할까요", "안내", "확인", "권유", "추천", "연계", "진행해보죠"];
 
     let asrPromise = null;
     let recorder = null;
@@ -396,6 +407,36 @@
       return ranked;
     }
 
+    function normalizeSpeakerPrefix(line) {
+      return line.replace(/^\s*(상담사|상담원|주무관|코치|컨설턴트|센터|구직자|내담자|참여자|민원인)\s*[:：]\s*/i, "").trim();
+    }
+
+    function classifyUtterance(line) {
+      const lowered = line.toLowerCase();
+      if (SEEKER_TAGS.some((tag) => lowered.includes(tag))) return "seeker";
+      if (COUNSELOR_TAGS.some((tag) => lowered.includes(tag))) return "counselor";
+      if (COUNSELOR_HINTS.some((hint) => lowered.includes(hint)) && line.includes("?")) return "counselor";
+      return "seeker";
+    }
+
+    function extractSeekerSpeech(rawText) {
+      const chunks = rawText
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      const extracted = [];
+      for (const chunk of chunks) {
+        const role = classifyUtterance(chunk);
+        if (role === "seeker") {
+          extracted.push(normalizeSpeakerPrefix(chunk));
+        }
+      }
+
+      if (extracted.length === 0) return rawText;
+      return extracted.join("\n");
+    }
+
     function buildJournal(text, topics, emotion, needs, summaryLines) {
       const topicText = topics.length ? topics.map((t) => t.key).join(", ") : "핵심 토픽 탐지 제한";
       const needsText = needs.join(", ");
@@ -406,20 +447,25 @@
         `- 상담일자: ${ids.sessionDate.value || todayLocal()}`,
         `- 내담자 코드: ${ids.clientCode.value.trim() || "미기재"}`,
         "",
-        "1) 주요 진술 요약",
+        "[공식 상담일지(구조화)]",
+        "1) 내담자 주요 진술",
         `${summaryLines[0] || "구직/진로 관련 어려움과 지원 필요를 표현함."}`,
+        "2) 핵심 진로 토픽",
+        `- ${topicText}`,
+        "3) 지원 니즈",
+        `- ${needsText}`,
         "",
-        "2) AI 분석 결과",
-        `- 주요 진로 토픽: ${topicText}`,
+        "[심리/정서 분석]",
         `- 불안도/감정 상태: ${emotion.level} (${emotion.score}/100)`,
-        `- 지원 니즈: ${needsText}`,
+        "- 해석: 정서표현 빈도와 진로갈등 표현을 기반으로 초기 추정",
+        "- 유의: 위기 신호는 자동결과만으로 확정하지 않고 면담으로 재확인",
         "",
-        "3) 상담자 참고 계획",
-        "- 단기: 우선순위 직무 2개를 기준으로 요구역량/진입경로 비교",
-        "- 중기: 이력서/면접/직업훈련 연계 등 실행 과제 설정",
-        "- 필요시: 정서안정 지원 및 후속 상담 연계",
+        "[다음 회기 개입 전략]",
+        "- 단기: 우선순위 직무 2개 기준 요구역량/진입경로 비교 과제 부여",
+        "- 중기: 이력서/면접 코칭 및 직업훈련 연계 실행 계획 수립",
+        "- 필요시: 심리·정서 안정 지원 및 전문기관 연계 검토",
         "",
-        "4) 핵심 근거 문장",
+        "[핵심 근거 문장]",
         summaryText,
         "",
         "[검토 필요] 자동 생성 결과는 초안이며, 최종 기록 전 상담자가 반드시 수정·확정해야 합니다."
@@ -558,6 +604,7 @@
       ids.sessionDate.value = todayLocal();
       ids.clientCode.value = "";
       ids.transcript.value = "";
+      ids.seekerOnlyText.value = "";
       ids.topicOut.value = "";
       ids.emotionOut.value = "";
       ids.needsOut.value = "";
@@ -567,8 +614,9 @@
     }
 
     function sampleText() {
-      ids.transcript.value = "요즘 경력전환을 고민하고 있는데 어떤 직종으로 지원해야 할지 결정이 어렵습니다. 데이터 관련 업무에 관심이 있지만 실무 경험이 부족해서 자신이 없습니다. 면접 준비와 이력서 작성도 막막하고, 당장 생계 때문에 빠른 취업이 필요해서 불안감이 큽니다. 직업훈련 과정과 채용 연계 정보를 함께 안내받고 싶습니다.";
-      renderAnalysis(ids.transcript.value);
+      ids.transcript.value = "상담사: 현재 희망 직종을 먼저 말씀해 주시겠어요?\n구직자: 요즘 경력전환을 고민하고 있는데 어떤 직종으로 지원해야 할지 결정이 어렵습니다.\n상담사: 불안감은 어느 정도인지요?\n구직자: 데이터 관련 업무에 관심이 있지만 실무 경험이 부족해서 자신이 없습니다. 면접 준비와 이력서 작성도 막막하고, 당장 생계 때문에 빠른 취업이 필요해서 불안감이 큽니다. 직업훈련 과정과 채용 연계 정보를 함께 안내받고 싶습니다.";
+      ids.seekerOnlyText.value = extractSeekerSpeech(ids.transcript.value);
+      renderAnalysis(ids.seekerOnlyText.value || ids.transcript.value);
       setStatus("샘플 텍스트 분석 완료");
     }
 
@@ -614,13 +662,25 @@
     });
 
     ids.reanalyzeBtn.addEventListener("click", () => {
-      const text = ids.transcript.value.trim();
+      const text = (ids.seekerOnlyText.value.trim() || ids.transcript.value.trim());
       if (!text) {
         alert("재분석할 텍스트가 없습니다.");
         return;
       }
       renderAnalysis(text);
       setStatus("텍스트 재분석 완료");
+    });
+
+    ids.extractSeekerBtn.addEventListener("click", () => {
+      const text = ids.transcript.value.trim();
+      if (!text) {
+        alert("추출할 원문 텍스트가 없습니다.");
+        return;
+      }
+      const seekerOnly = extractSeekerSpeech(text);
+      ids.seekerOnlyText.value = seekerOnly;
+      renderAnalysis(seekerOnly);
+      setStatus("구직자 발화 추출 및 분석 완료");
     });
 
     ids.sampleBtn.addEventListener("click", sampleText);
