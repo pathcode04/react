@@ -1,0 +1,8 @@
+﻿{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "routes": [
+    { "src": "/", "dest": "/index.html" },
+    { "src": "/react", "dest": "/react.html" }
+  ],
+  "cleanUrls": true
+}
